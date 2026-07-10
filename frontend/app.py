@@ -78,6 +78,20 @@ def df_to_markdown(df):
         lines.append("| " + " | ".join(row_str) + " |")
     return "\n".join(lines)
 
+def df_to_compact_str(df):
+    """Custom compact implementation to serialize DataFrame content for prompt optimization."""
+    if df is None or df.empty:
+        return "Tidak ada data."
+    lines = []
+    for _, row in df.iterrows():
+        proto = "TCP" if row.get("PROTOCOL") == 6 else "UDP" if row.get("PROTOCOL") == 17 else str(row.get("PROTOCOL"))
+        port = row.get("L4_DST_PORT")
+        pkts = row.get("IN_PKTS")
+        bytes_val = row.get("IN_BYTES")
+        pred = row.get("PREDICTION")
+        lines.append(f"- Proto: {proto}, Port: {port}, Pkts: {pkts}, Bytes: {bytes_val}, Pred: {pred}")
+    return "\n".join(lines)
+
 def get_ollama_stream(ollama_host, models_to_try, prompt_payload):
     """
     Tries to connect to Ollama and return a generator yielding tokens.
@@ -90,8 +104,8 @@ def get_ollama_stream(ollama_host, models_to_try, prompt_payload):
                 "prompt": prompt_payload,
                 "stream": True
             }
-            # Start post with stream=True. Timeout of 45s is for connection establishment and initial model loading.
-            response = requests.post(f"{ollama_host}/api/generate", json=payload, stream=True, timeout=45.0)
+            # Start post with stream=True. Timeout of 180s is for connection establishment and initial model loading.
+            response = requests.post(f"{ollama_host}/api/generate", json=payload, stream=True, timeout=180.0)
             if response.status_code == 200:
                 def generator():
                     import json
@@ -103,6 +117,7 @@ def get_ollama_stream(ollama_host, models_to_try, prompt_payload):
         except Exception as e:
             print(f"Ollama stream failed for {model_name}: {e}")
     return None, None
+
 
 # ==========================================
 # RESOURCE LOADERS & CACHING
@@ -584,7 +599,7 @@ with tab_assistant:
                         cnt_benign = sum(df_ip["PREDICTION"] == "Benign")
                         
                         last_5_logs = df_ip[["PROTOCOL", "L4_DST_PORT", "IN_PKTS", "IN_BYTES", "PREDICTION"]].head(5)
-                        last_5_logs_md = df_to_markdown(last_5_logs)
+                        last_5_logs_md = df_to_compact_str(last_5_logs)
                         
                         data_summary = f"""Alamat IP Terdeteksi: {target_ip}
 Total Koneksi Telemetri: {cnt_total:,} aliran
@@ -603,7 +618,7 @@ Total Koneksi Telemetri: {cnt_total:,} aliran
                         data_summary = f"Alamat IP {target_ip} tidak ditemukan dalam database log aktif saat ini.{recommendation}"
                 else:
                     # Generic summary fallback
-                    anomalous_context = df_to_markdown(df_live[df_live["PREDICTION"] != "Benign"].head(5))
+                    anomalous_context = df_to_compact_str(df_live[df_live["PREDICTION"] != "Benign"].head(5))
                     data_summary = f"""Tidak ada Alamat IP spesifik yang dideteksi dalam pertanyaan analis.
 Berikut adalah 5 log anomali aktif terakhir di SOC secara umum:
 {anomalous_context}"""
