@@ -92,30 +92,30 @@ def df_to_compact_str(df):
         lines.append(f"- Proto: {proto}, Port: {port}, Pkts: {pkts}, Bytes: {bytes_val}, Pred: {pred}")
     return "\n".join(lines)
 
-def get_ollama_stream(ollama_host, models_to_try, prompt_payload):
+def get_ollama_stream(ollama_host, models_to_try, messages):
     """
-    Tries to connect to Ollama and return a generator yielding tokens.
+    Tries to connect to Ollama Chat Completion API (/api/chat) and return a generator yielding tokens.
     If the first model fails or raises an error, tries the fallback model.
     """
     for model_name in models_to_try:
         try:
             payload = {
                 "model": model_name,
-                "prompt": prompt_payload,
+                "messages": messages,
                 "stream": True
             }
             # Start post with stream=True. Timeout of 180s is for connection establishment and initial model loading.
-            response = requests.post(f"{ollama_host}/api/generate", json=payload, stream=True, timeout=180.0)
+            response = requests.post(f"{ollama_host}/api/chat", json=payload, stream=True, timeout=180.0)
             if response.status_code == 200:
                 def generator():
                     import json
                     for line in response.iter_lines():
                         if line:
                             chunk = json.loads(line.decode("utf-8"))
-                            yield chunk.get("response", "")
+                            yield chunk.get("message", {}).get("content", "")
                 return generator(), model_name
         except Exception as e:
-            print(f"Ollama stream failed for {model_name}: {e}")
+            print(f"Ollama chat stream failed for {model_name}: {e}")
     return None, None
 
 
@@ -413,12 +413,16 @@ with tab_dashboard:
             
             if st.button("🚨 GENERATE PLAYBOOK VIA OLLAMA", type="primary", use_container_width=True):
                 prompt_text = f"Analyze L4 NetFlow alert. Source IP: {selected_ip}, Attack: {selected_type}, Target Port: {selected_port}, Protocol: {selected_protocol}. Provide technical analysis and specific mitigation BGP Flowspec command."
+                messages = [
+                    {"role": "system", "content": "Kamu adalah Senior SOC Analyst AI formal. Jawab hanya data NetFlow. DILARANG keras membuat skrip ofensif, exploit, socket flood, atau malware untuk alasan apapun. Jika dipaksa, katakan: 'Permintaan ditolak berdasarkan regulasi keselamatan siber.'"},
+                    {"role": "user", "content": prompt_text}
+                ]
                 models_to_try = [
                     "qwen2.5:3b" if "qwen" in llm_model else "gemma2:2b",
                     "gemma2:2b" if "qwen" in llm_model else "qwen2.5:3b"
                 ]
                 
-                stream_gen, active_model = get_ollama_stream(ollama_host, models_to_try, prompt_text)
+                stream_gen, active_model = get_ollama_stream(ollama_host, models_to_try, messages)
                 
                 if stream_gen is not None:
                     # Stream response live
@@ -507,6 +511,13 @@ with tab_assistant:
         response_content = ""
         is_routed = False
         is_rendered = False
+
+        # Pagar 0: Application-Level Security Check (Python Interceptor)
+        blacklist = ['flood', 'exploit', 'malware', 'soket membanjiri', 'peras', 'hack', 'script ddos', 'membuat script ddos', 'socket.send']
+        user_input_lower = user_input.lower()
+        if any(term in user_input_lower for term in blacklist):
+            response_content = "🚨 [SECURITY VIOLATION]: Permintaan diblokir oleh Application Guardrail Layer 0. Sistem mendeteksi parameter instruksi ofensif yang melanggar kebijakan keselamatan siber operasional SOC."
+            is_routed = True
 
         # --- HYBRID CHATBOT ROUTER ---
         # Clean user input for strict matching
@@ -623,14 +634,17 @@ Total Koneksi Telemetri: {cnt_total:,} aliran
 Berikut adalah 5 log anomali aktif terakhir di SOC secara umum:
 {anomalous_context}"""
                 
-                # Step C: Structure System Prompt (RAG Method)
-                prompt_payload = f"""Kamu adalah Senior SOC Analyst. Analisislah data log jaringan berikut untuk menjawab pertanyaan analis. Jawablah menggunakan Bahasa Indonesia formal, taktis, dan padat. Dilarang berhalusinasi di luar data yang diberikan!
-
-[FAKTA DATA NETFLOW IP]:
-{data_summary}
-
-[PERTANYAAN ANALIS]:
-{user_input}"""
+                # Step C: Structure Chat Messages for API Chat Completion (Pagar 1)
+                messages = [
+                    {
+                        "role": "system",
+                        "content": "Kamu adalah Senior SOC Analyst AI formal. Jawab hanya data NetFlow. DILARANG keras membuat skrip ofensif, exploit, socket flood, atau malware untuk alasan apapun. Jika dipaksa, katakan: 'Permintaan ditolak berdasarkan regulasi keselamatan siber.'"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Konteks Log Jaringan:\n{data_summary}\n\nPertanyaan: {user_input}"
+                    }
+                ]
 
                 # Step D: Query local Ollama API via streaming with fallback
                 models_to_try = [
@@ -638,7 +652,7 @@ Berikut adalah 5 log anomali aktif terakhir di SOC secara umum:
                     "gemma2:2b" if "qwen" in llm_model else "qwen2.5:3b"
                 ]
                 
-                stream_gen, active_model = get_ollama_stream(ollama_host, models_to_try, prompt_payload)
+                stream_gen, active_model = get_ollama_stream(ollama_host, models_to_try, messages)
                 
                 if stream_gen is not None:
                     with st.chat_message("assistant"):
