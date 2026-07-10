@@ -1,0 +1,44 @@
+services:
+  backend-engine:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: netflow_backend_engine
+    volumes:
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+    networks:
+      - netflow-soc-network
+
+  web-app:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: netflow_analytics_app
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/workspace
+      - ./data:/workspace/data
+      - ./models:/workspace/models
+    environment:
+      - OLLAMA_HOST=http://ollama-service:11434
+    depends_on:
+      - ollama-service
+      - backend-engine
+    networks:
+      - netflow-soc-network
+
+  ollama-service:
+    image: ollama/ollama:latest
+    container_name: ollama_local_engine
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_storage:/root/.ollama
+    networks:
+      - netflow-soc-network
+
+networks:
+  netflow-soc-network:
+    driver: bridge
