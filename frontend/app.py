@@ -78,6 +78,32 @@ def df_to_markdown(df):
         lines.append("| " + " | ".join(row_str) + " |")
     return "\n".join(lines)
 
+def get_ollama_stream(ollama_host, models_to_try, prompt_payload):
+    """
+    Tries to connect to Ollama and return a generator yielding tokens.
+    If the first model fails or raises an error, tries the fallback model.
+    """
+    for model_name in models_to_try:
+        try:
+            payload = {
+                "model": model_name,
+                "prompt": prompt_payload,
+                "stream": True
+            }
+            # Start post with stream=True. Timeout of 45s is for connection establishment and initial model loading.
+            response = requests.post(f"{ollama_host}/api/generate", json=payload, stream=True, timeout=45.0)
+            if response.status_code == 200:
+                def generator():
+                    import json
+                    for line in response.iter_lines():
+                        if line:
+                            chunk = json.loads(line.decode("utf-8"))
+                            yield chunk.get("response", "")
+                return generator(), model_name
+        except Exception as e:
+            print(f"Ollama stream failed for {model_name}: {e}")
+    return None, None
+
 # ==========================================
 # RESOURCE LOADERS & CACHING
 # ==========================================
@@ -163,6 +189,8 @@ with st.sidebar:
         ["All Traffic", "Benign Only", "Attacks Only", "DDoS", "Port Scanning", "Brute Force"]
     )
     
+    ip_search = st.text_input("🔍 Search IP Source Address:", value="")
+    
     rows_to_show = st.slider("Display Limit (Preview Table):", min_value=10, max_value=1000, value=100, step=10)
     
     st.divider()
@@ -188,6 +216,9 @@ elif threat_filter != "All Traffic":
     df_filtered = df_live[df_live["PREDICTION"] == threat_filter]
 else:
     df_filtered = df_live
+
+if ip_search.strip():
+    df_filtered = df_filtered[df_filtered["IPV4_SRC_ADDR"].str.contains(ip_search.strip(), case=False, na=False)]
 
 # Calculate General Statistics
 total_flows = len(df_live)
@@ -366,45 +397,43 @@ with tab_dashboard:
             st.write(f"Generate response plan for attacker **{selected_ip}** (Threat: **{selected_type}**):")
             
             if st.button("🚨 GENERATE PLAYBOOK VIA OLLAMA", type="primary", use_container_width=True):
-                with st.spinner("Generating playbook via local LLM..."):
-                    payload = {
-                        "model": "qwen2.5:3b" if "qwen" in llm_model else "gemma2:2b",
-                        "prompt": f"Analyze L4 NetFlow alert. Source IP: {selected_ip}, Attack: {selected_type}, Target Port: {selected_port}, Protocol: {selected_protocol}. Provide technical analysis and specific mitigation BGP Flowspec command.",
-                        "stream": False
-                    }
-                    try:
-                        response = requests.post(f"{ollama_host}/api/generate", json=payload, timeout=6.0)
-                        if response.status_code == 200:
-                            playbook_text = response.json().get("response")
-                            st.markdown(playbook_text)
-                        else:
-                            raise Exception(f"Ollama returned status {response.status_code}")
-                    except Exception as e:
-                        # Fallback template
-                        st.markdown(f"""
-                        ### 🤖 Incident Analysis Report (Local Playbook Fallback)
-                        - **Incident Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                        - **Anomaly Categorization:** `{selected_type}`
-                        - **Attacker Source IP:** `{selected_ip}`
-                        - **Victim Target Port:** L4 Port `{selected_port}`
-                        
-                        **Technical Assessment:**
-                        The connection logs denote a high-intensity `{selected_type}` footprint. Standard telemetry indicators show anomalous packet volume ratios. Mitigation is required immediately.
-                        
-                        **Recommended BGP Flowspec Mitigation Command:**
-                        ```bash
-                        flow route {{
-                            match {{
-                                source {selected_ip}/32;
-                                destination-port {selected_port};
-                                protocol tcp;
-                            }}
-                            then {{
-                                rate-limit 0; # Drop traffic
-                            }}
+                prompt_text = f"Analyze L4 NetFlow alert. Source IP: {selected_ip}, Attack: {selected_type}, Target Port: {selected_port}, Protocol: {selected_protocol}. Provide technical analysis and specific mitigation BGP Flowspec command."
+                models_to_try = [
+                    "qwen2.5:3b" if "qwen" in llm_model else "gemma2:2b",
+                    "gemma2:2b" if "qwen" in llm_model else "qwen2.5:3b"
+                ]
+                
+                stream_gen, active_model = get_ollama_stream(ollama_host, models_to_try, prompt_text)
+                
+                if stream_gen is not None:
+                    # Stream response live
+                    st.write_stream(stream_gen)
+                else:
+                    # Fallback template
+                    st.markdown(f"""
+                    ### 🤖 Incident Analysis Report (Local Playbook Fallback)
+                    - **Incident Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    - **Anomaly Categorization:** `{selected_type}`
+                    - **Attacker Source IP:** `{selected_ip}`
+                    - **Victim Target Port:** L4 Port `{selected_port}`
+                    
+                    **Technical Assessment:**
+                    The connection logs denote a high-intensity `{selected_type}` footprint. Standard telemetry indicators show anomalous packet volume ratios. Mitigation is required immediately.
+                    
+                    **Recommended BGP Flowspec Mitigation Command:**
+                    ```bash
+                    flow route {{
+                        match {{
+                            source {selected_ip}/32;
+                            destination-port {selected_port};
+                            protocol tcp;
                         }}
-                        ```
-                        """)
+                        then {{
+                            rate-limit 0; # Drop traffic
+                        }}
+                    }}
+                    ```
+                    """)
                         
         with col_i2:
             st.subheader("🛡️ Human Mitigation Verification")
@@ -462,13 +491,17 @@ with tab_assistant:
 
         response_content = ""
         is_routed = False
+        is_rendered = False
 
         # --- HYBRID CHATBOT ROUTER ---
-        # 1. Regex Pattern 1: tampilkan N [kritikal/ddos/port scanning/brute force/benign]
-        regex_show = re.search(r"tampilkan\s+(\d+)\s+(kritikal|ddos|port\s+scanning|brute\s+force|benign)", user_input.lower())
+        # Clean user input for strict matching
+        cleaned_input = user_input.strip().lower()
+
+        # 1. Regex Pattern 1 (Strict Anchor Line): tampilkan N [kritikal/ddos/brute force/scan]
+        regex_show = re.search(r"^tampilkan\s+(\d+)\s+(kritikal|ddos|brute\s+force|scan)$", cleaned_input)
         
-        # 2. Regex Pattern 2: (ip|cari) IP_ADDRESS
-        regex_ip = re.search(r"(?:ip|cari)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", user_input.lower())
+        # 2. Regex Pattern 2 (Strict Anchor Line): (ip|cari) IP_ADDRESS
+        regex_ip = re.search(r"^(?:ip|cari)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$", cleaned_input)
 
         if regex_show:
             is_routed = True
@@ -482,7 +515,7 @@ with tab_assistant:
             elif threat_type == "ddos":
                 df_res = df_live[df_live["PREDICTION"] == "DDoS"].head(count)
                 desc = "DDoS Flood"
-            elif threat_type == "port scanning":
+            elif threat_type == "scan":
                 df_res = df_live[df_live["PREDICTION"] == "Port Scanning"].head(count)
                 desc = "Port Scanning"
             elif threat_type == "brute force":
@@ -526,55 +559,89 @@ with tab_assistant:
                 )
                 response_content += df_to_markdown(df_ip[["PROTOCOL", "L4_DST_PORT", "IN_PKTS", "IN_BYTES", "PREDICTION"]].head(10))
             else:
-                response_content = f"IP `{target_ip}` tidak ditemukan dalam log lalu lintas aktif."
+                import difflib
+                unique_ips = df_live["IPV4_SRC_ADDR"].unique().tolist()
+                closest_matches = difflib.get_close_matches(target_ip, unique_ips, n=1, cutoff=0.0)
+                recommendation = f" Mungkin maksud Anda: `{closest_matches[0]}`?" if closest_matches else ""
+                response_content = f"❌ Alamat IP `{target_ip}` tidak ditemukan secara langsung di database log SOC.{recommendation}"
 
-        # 3. Fallback: Query to Local Ollama Host (host.docker.internal)
+        # 3. Fallback: RAG Routing for Free-form Questions
         if not is_routed:
-            with st.spinner("Analyzing request via Local LLM..."):
-                # System Prompt configuration
-                system_prompt = (
-                    "Anda adalah Senior SOC Analyst profesional. "
-                    "Jawab pertanyaan analis keamanan dengan bahasa Indonesia yang formal, taktis, padat, dan langsung pada sasaran teknis. "
-                    "Dilarang keras berhalusinasi atau mengarang data di luar log yang disediakan."
-                )
+            with st.spinner("Analyzing request..."):
+                # Step A: Detect if an IP address exists in the free-form question
+                ip_extracted = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", user_input)
                 
-                # Fetch recent anomalous context logs for LLM reference
-                anomalous_context = df_to_markdown(df_live[df_live["PREDICTION"] != "Benign"].head(5))
-                
-                prompt_payload = f"""
-                [CONTEXT LOGS]
-                {anomalous_context}
-                
-                [SYSTEM INSTRUCTION]
-                {system_prompt}
-                
-                [QUESTION]
-                {user_input}
-                """
-                
-                payload = {
-                    "model": "qwen2.5:3b" if "qwen" in llm_model else "gemma2:2b",
-                    "prompt": prompt_payload,
-                    "stream": False
-                }
-                
-                try:
-                    response = requests.post(f"{ollama_host}/api/generate", json=payload, timeout=8.0)
-                    if response.status_code == 200:
-                        response_content = response.json().get("response")
+                # Step B: Get facts/summary from Pandas
+                if ip_extracted:
+                    target_ip = ip_extracted.group(1)
+                    df_ip = df_live[df_live["IPV4_SRC_ADDR"] == target_ip]
+                    
+                    if not df_ip.empty:
+                        cnt_total = len(df_ip)
+                        cnt_ddos = sum(df_ip["PREDICTION"] == "DDoS")
+                        cnt_scan = sum(df_ip["PREDICTION"] == "Port Scanning")
+                        cnt_bf = sum(df_ip["PREDICTION"] == "Brute Force")
+                        cnt_benign = sum(df_ip["PREDICTION"] == "Benign")
+                        
+                        last_5_logs = df_ip[["PROTOCOL", "L4_DST_PORT", "IN_PKTS", "IN_BYTES", "PREDICTION"]].head(5)
+                        last_5_logs_md = df_to_markdown(last_5_logs)
+                        
+                        data_summary = f"""Alamat IP Terdeteksi: {target_ip}
+Total Koneksi Telemetri: {cnt_total:,} aliran
+  - DDoS Flood: {cnt_ddos} koneksi
+  - Port Scanning: {cnt_scan} koneksi
+  - Brute Force: {cnt_bf} koneksi
+  - Benign (Wajar): {cnt_benign} koneksi
+
+5 Aliran Koneksi Terakhir:
+{last_5_logs_md}"""
                     else:
-                        raise Exception(f"Ollama returned status {response.status_code}")
-                except Exception as e:
-                    # Detailed technical fallback
-                    response_content = (
-                        "### 🤖 Tanggapan Analis (Simulasi Offline LLM)\n\n"
-                        "Maaf, server Ollama di `host.docker.internal` saat ini sedang offline atau tidak dapat dijangkau. "
-                        "Berikut adalah analisis taktis berdasarkan data log perimeter:\n\n"
-                        "1. **Analisis L4**: Sebagian besar anomali didorong oleh serangan volumetrik DDoS (IN_PKTS > 1000, durasi sangat singkat) dan scanning terarah ke port acak.\n"
-                        "2. **Rekomendasi Tindakan**: Lakukan rate-limiting pada sub-net eksternal yang mencurigakan dan aktifkan filter BGP Flowspec segera."
-                    )
+                        import difflib
+                        unique_ips = df_live["IPV4_SRC_ADDR"].unique().tolist()
+                        closest_matches = difflib.get_close_matches(target_ip, unique_ips, n=1, cutoff=0.0)
+                        recommendation = f" Mungkin maksud Anda: `{closest_matches[0]}`?" if closest_matches else ""
+                        data_summary = f"Alamat IP {target_ip} tidak ditemukan dalam database log aktif saat ini.{recommendation}"
+                else:
+                    # Generic summary fallback
+                    anomalous_context = df_to_markdown(df_live[df_live["PREDICTION"] != "Benign"].head(5))
+                    data_summary = f"""Tidak ada Alamat IP spesifik yang dideteksi dalam pertanyaan analis.
+Berikut adalah 5 log anomali aktif terakhir di SOC secara umum:
+{anomalous_context}"""
+                
+                # Step C: Structure System Prompt (RAG Method)
+                prompt_payload = f"""Kamu adalah Senior SOC Analyst. Analisislah data log jaringan berikut untuk menjawab pertanyaan analis. Jawablah menggunakan Bahasa Indonesia formal, taktis, dan padat. Dilarang berhalusinasi di luar data yang diberikan!
+
+[FAKTA DATA NETFLOW IP]:
+{data_summary}
+
+[PERTANYAAN ANALIS]:
+{user_input}"""
+
+                # Step D: Query local Ollama API via streaming with fallback
+                models_to_try = [
+                    "qwen2.5:3b" if "qwen" in llm_model else "gemma2:2b",
+                    "gemma2:2b" if "qwen" in llm_model else "qwen2.5:3b"
+                ]
+                
+                stream_gen, active_model = get_ollama_stream(ollama_host, models_to_try, prompt_payload)
+                
+                if stream_gen is not None:
+                    with st.chat_message("assistant"):
+                        response_content = st.write_stream(stream_gen)
+                    is_rendered = True
+                else:
+                    # Detailed technical RAG-based fallback
+                    response_content = f"""### 🤖 Tanggapan Analis (Simulasi Offline LLM RAG)
+*Server Ollama di `{ollama_host}` sedang offline atau model tidak tersedia. Berikut adalah analisis log berbasis fakta RAG lokal:*
+
+**[FAKTA DATA NETFLOW IP]:**
+{data_summary}
+
+**Analisis & Kesimpulan Taktis:**
+Berdasarkan fakta log di atas, pola koneksi menunjukkan karakteristik yang mencurang. Segera lakukan audit mendalam pada IP yang terdeteksi dan lakukan mitigasi (seperti BGP Flowspec rate-limiting) pada perimeter network."""
 
         # Append and render assistant response
         st.session_state.messages.append({"role": "assistant", "content": response_content})
-        with st.chat_message("assistant"):
-            st.markdown(response_content)
+        if not is_rendered:
+            with st.chat_message("assistant"):
+                st.markdown(response_content)

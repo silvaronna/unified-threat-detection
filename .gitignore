@@ -1,0 +1,21 @@
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# NetFlow Local Data & ML Models
+data/*.parquet
+models/*.joblib
+
+# Docker & Container Local Volumes
+ollama_storage/
+.docker/
+
+# OS/System files
+.DS_Store
+Thumbs.db
+.venv/
+env/
+venv/
