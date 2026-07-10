@@ -252,13 +252,16 @@ unified-threat-detection/
 Berikut adalah penanda letak screenshot visual aplikasi untuk kebutuhan pelaporan formal:
 
 `[Screenshot: Tampilan Utama Dashboard SOC]`
-*(Letakkan gambar dashboard utama Streamlit Tab 1 di sini untuk memperlihatkan metriks Panel, grafik donat distribusi serangan, dan tabel feed log berwarna)*
+<img width="1734" height="824" alt="image" src="https://github.com/user-attachments/assets/e28e6f3b-0fae-4ee7-b6f8-5d22dbb1db6d" />
 
-`[Screenshot: GenAI Incident Playbook Generator]`
-*(Letakkan gambar deteksi klik baris tabel feed dan hasil streaming output mitigasi taktis insiden siber BGP Flowspec di sini)*
+
+`[Screenshot: GenAI Incident Playbook Recommendation]`
+<img width="1050" height="740" alt="image" src="https://github.com/user-attachments/assets/a9ef4abe-b548-4585-a8f3-68a104d942e2" />
+
 
 `[Screenshot: AI Security Assistant Chatbot Tab]`
-*(Letakkan gambar Tab 2 yang memamerkan antarmuka chatbot interaktif, termasuk hasil deteksi IP otomatis dan respons streaming dari model lokal Qwen2.5 di sini)*
+<img width="1085" height="820" alt="image" src="https://github.com/user-attachments/assets/2dc96a62-e649-487d-b0ad-80964aa74989" />
+
 
 ---
 
