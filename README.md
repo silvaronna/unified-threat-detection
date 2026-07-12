@@ -64,12 +64,7 @@ Sebelum melakukan deployment kontainer, pastikan sistem host Anda memenuhi kuali
 
 1. **Sistem Operasi**: Windows 10/11 dengan **WSL2** backend (distribusi Ubuntu Linux direkomendasikan) atau sistem operasi Linux Native.
 2. **Container Engine**: Docker Desktop (WSL2-based engine aktif) atau Docker Engine bare-metal terinstal di host.
-3. **Local LLM Engine**: **Ollama** harus terpasang langsung di Host OS (Windows/WSL2 bare-metal) untuk memaksimalkan performa akselerasi GPU lokal.
-4. **Persiapan Model**: Pastikan port `11434` terbuka dan jalankan perintah penarikan model berikut di terminal host Anda:
-   ```bash
-   ollama pull qwen2.5:3b
-   ollama pull gemma2:2b
-   ```
+3. **Local LLM Engine**: **Ollama** dikemas secara kontainer penuh dalam ekosistem Compose dan akan mengunduh model secara otomatis saat pertama kali dijalankan. Tidak ada instalasi manual yang diperlukan.
 
 ---
 
@@ -84,14 +79,12 @@ git clone https://github.com/username/unified-threat-detection.git
 cd unified-threat-detection
 ```
 
-### Langkah 2: Membuka Koneksi Host Ollama
-Pastikan daemon Ollama di host Anda menyala dan siap menerima request eksternal dari Docker container. Secara default pada Windows, Ollama berjalan di latar belakang pada alamat `http://localhost:11434`.
-
-### Langkah 3: Kompilasi & Jalankan Multi-Container
-Jalankan orkestrasi Docker Compose untuk membangun (*build*) image kontainer frontend, backend, dan local database volume secara *air-gapped*:
+### Langkah 2: Kompilasi & Jalankan Multi-Container
+Jalankan orkestrasi Docker Compose untuk membangun (*build*) image kontainer frontend, backend, database volume, serta service Ollama lokal:
 ```bash
 docker compose up --build -d
 ```
+*Catatan: Saat kontainer pertama kali menyala, service Ollama (`ollama_local_engine`) akan otomatis mengunduh model `qwen2.5:3b` dan `gemma2:2b` di latar belakang. Proses ini mungkin memakan waktu beberapa menit tergantung kecepatan internet Anda. Berkas model akan disimpan secara permanen di volume `./ollama_storage`.*
 
 ### Langkah 4: Eksekusi Data Generation & ML Training Pipeline
 Karena database dan model memerlukan bobot awal, jalankan skrip backend generator data dan training ML secara berurutan di dalam kontainer `netflow_backend_engine`:

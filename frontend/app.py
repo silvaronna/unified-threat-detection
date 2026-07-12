@@ -215,7 +215,8 @@ with st.sidebar:
     else:
         st.warning("⚠️ ML Model: Not Connected (Using static veto rules only)")
         
-    ollama_host = st.text_input("Local Ollama Host:", value="http://host.docker.internal:11434")
+    default_ollama = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434")
+    ollama_host = st.text_input("Local Ollama Host:", value=default_ollama)
     llm_model = st.selectbox("Primary Local LLM:", ["qwen2.5:3b", "gemma2:2b"])
     
     if st.button("🔄 Reload Data & Refresh Cache"):

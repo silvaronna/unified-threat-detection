@@ -22,11 +22,30 @@ services:
       - ./data:/workspace/data
       - ./models:/workspace/models
     environment:
-      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_HOST=http://ollama-service:11434
     depends_on:
       - backend-engine
+      - ollama-service
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - netflow-soc-network
+
+  ollama-service:
+    image: ollama/ollama:latest
+    container_name: ollama_local_engine
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_storage:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull qwen2.5:3b
+        ollama pull gemma2:2b
+        wait
     networks:
       - netflow-soc-network
 
